@@ -9,7 +9,7 @@ export function renderTemplate(tpl, vars) {
   });
 }
 
-/** 対象以外の公開記事。AI が内部リンクを張れる先の一覧(自ドメインのみ)。 */
+/** 対象以外の公開記事。AI が内部リンクを張れる先の一覧（自ドメインのみ）。 */
 export function internalLinkCandidates(repoDir, config, excludeFile) {
   const dir = join(repoDir, config.contentDir);
   return readdirSync(dir).filter((f) => f.endsWith('.md')).flatMap((f) => {
