@@ -12,9 +12,21 @@ const args = {}; const argv = process.argv.slice(2);
 for (let i = 0; i < argv.length; i++) if (argv[i].startsWith('--')) args[argv[i].slice(2)] = argv[++i];
 for (const k of ['repo', 'candidate', 'out-dir', 'run-log', 'outcome']) if (!args[k]) { console.error(`--${k} が必要`); process.exit(2); }
 
-const config = loadConfig(args.repo);
-const candidate = JSON.parse(readFileSync(args.candidate, 'utf8'));
-const original = readFileSync(join(args.repo, candidate.file), 'utf8');
+let config, candidate, original;
+try {
+  config = loadConfig(args.repo);
+  candidate = JSON.parse(readFileSync(args.candidate, 'utf8'));
+  original = readFileSync(join(args.repo, candidate.file), 'utf8');
+} catch (err) {
+  const outcome = {
+    status: 'blocked',
+    failures: [{ check: 0, detail: `検査の前提を読めなかった: ${err.message}` }],
+    candidate: null, pendingAction: null, diff: null, fingerprint: null,
+  };
+  writeFileSync(args.outcome, `${JSON.stringify(outcome, null, 2)}\n`);
+  console.log(`不合格 1 件:\n  [0] ${outcome.failures[0].detail}`);
+  process.exit(0);
+}
 const failures = [];
 const articlePath = join(args['out-dir'], 'article.md');
 const paPath = join(args['out-dir'], 'pending-action.json');

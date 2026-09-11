@@ -8,7 +8,7 @@ const FORBIDDEN_CONTENT = [
   [/javascript:|data:/i, 'javascript:/data: URI'],
   [/^\s*(import|export)\s/m, 'MDX の import/export'],
   [/\{\{|\{%|<%/, 'テンプレート構文'],
-  [/[​-‏‪-‮⁦-⁩]/, 'ゼロ幅・双方向制御文字'],
+  [/[\u200B-\u200F\u202A-\u202E\u2066-\u2069]/, 'ゼロ幅・双方向制御文字'],
   [/display\s*:\s*none|font-size\s*:\s*0/i, '隠しスタイル'],
   [/[A-Za-z0-9+/]{120,}={0,2}/, 'base64 の塊'],
 ];
@@ -27,7 +27,27 @@ export function domainOf(url) { try { return new URL(url).hostname.replace(/^www
 export function japaneseRatio(text) {
   const chars = [...text.replace(/\s/g, '')];
   if (!chars.length) return 1;
-  return chars.filter((c) => /[぀-ヿ一-鿿]/.test(c)).length / chars.length;
+  return chars.filter((c) => /[\u3040-\u30FF\u4E00-\u9FFF]/.test(c)).length / chars.length;
+}
+
+/** 正規表現のすべての一致を文字列の配列で返す（g フラグを補う）。 */
+export function matchList(re, text) {
+  const g = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  return [...text.matchAll(g)].map((m) => m[0]);
+}
+
+/**
+ * revised にあって original では説明できない一致だけを返す。
+ * 「元記事に 1 つあれば以後すべて見逃す」を避けるため、出現の多重集合で差を取る。
+ */
+export function newOccurrences(re, revised, original) {
+  const pool = matchList(re, original);
+  return matchList(re, revised).filter((m) => {
+    const i = pool.indexOf(m);
+    if (i === -1) return true;
+    pool.splice(i, 1);
+    return false;
+  });
 }
 
 /** 設計書 §5 の 8 項目。AI を介さない。1 つでも不合格なら書き戻さない。 */
@@ -63,10 +83,14 @@ export function verifyChange({ original, revised, pendingAction, candidate, conf
   }
   if (/\brel=|\btarget=/.test(revised) && !/\brel=|\btarget=/.test(original)) fail(3, 'rel/target の新出');
 
-  // 4 実行可能・隠しコンテンツ（コードフェンス外）
-  const bodyNoCode = stripCodeFences(R.body), origNoCode = stripCodeFences(O.body);
-  for (const [re, label] of FORBIDDEN_CONTENT) if (re.test(bodyNoCode) && !re.test(origNoCode)) fail(4, `${label} の新出`);
-  if (/<!--/.test(bodyNoCode) && !/<!--/.test(origNoCode)) fail(4, 'HTML コメントの新出');
+  // 4 実行可能・隠しコンテンツ（コードフェンス外。frontmatter の値も対象にする）
+  const revNoCode = stripCodeFences(revised), origNoCode = stripCodeFences(original);
+  for (const [re, label] of FORBIDDEN_CONTENT) {
+    const news = newOccurrences(re, revNoCode, origNoCode);
+    if (news.length > 0) fail(4, `${label} の新出: ${news[0].slice(0, 40)}`);
+  }
+  const newComments = newOccurrences(/<!--/, revNoCode, origNoCode);
+  if (newComments.length > 0) fail(4, 'HTML コメントの新出');
 
   // 5 規模
   const { added, removed } = lineDiff(original, revised);

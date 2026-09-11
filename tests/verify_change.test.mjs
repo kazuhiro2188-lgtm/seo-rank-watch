@@ -45,3 +45,13 @@ test('AI が出力しなかった・JSON が壊れていると blocked', () => {
   assert.ok(o.failures.some((f) => /pending-action/.test(f.detail)));
   rmSync(dir, { recursive: true, force: true });
 });
+test('candidate.json が壊れていても終了コード 0 で outcome を書く（実行時の読み込み失敗）', () => {
+  const dir = setup();
+  writeFileSync(join(dir, 'candidate.json'), '{broken');
+  const r = run(dir);
+  assert.equal(r.status, 0, r.stderr);
+  const o = JSON.parse(readFileSync(join(dir, 'outcome.json'), 'utf8'));
+  assert.equal(o.status, 'blocked');
+  assert.equal(o.candidate, null);
+  rmSync(dir, { recursive: true, force: true });
+});

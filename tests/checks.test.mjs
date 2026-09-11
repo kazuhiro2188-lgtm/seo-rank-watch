@@ -59,7 +59,7 @@ test('4 実行可能・隠しコンテンツ: HTML タグ・テンプレート�
   assert.ok(checks(run(`${GOOD}\n<script>alert(1)</script>\n`)).includes(4));
   assert.ok(checks(run(`${GOOD}\n<a href="/x">link</a>\n`)).includes(4));
   assert.ok(checks(run(`${GOOD}\n{{ site.secret }}\n`)).includes(4));
-  assert.ok(checks(run(`${GOOD}\n見えない​文字\n`)).includes(4));
+  assert.ok(checks(run(`${GOOD}\n見えない\u200B文字\n`)).includes(4));
   assert.ok(checks(run(`${GOOD}\n<!-- 隠し -->\n`)).includes(4));
   assert.equal(run(`${GOOD}\n\`\`\`html\n<div>例</div>\n\`\`\`\n`).ok, true);
 });
@@ -85,4 +85,24 @@ test('8 申告: キーワード不一致・不正な editType・前回と同じ�
   assert.ok(checks(run(GOOD, { candidate: { avoidEditType: 'faq' } })).includes(8));
   assert.ok(checks(run(GOOD, { pa: { needs: '' } })).includes(8));
   assert.ok(checks(run(GOOD, { pa: { proposals: 'not array' } })).includes(8));
+});
+
+test('4 追加: frontmatter の値（faqs）に <script> を混入させても不合格', () => {
+  const bad = GOOD.replace('a: "本文にある事実で答える"', 'a: "<script>alert(1)</script>"');
+  assert.ok(checks(run(bad)).includes(4));
+});
+test('4 追加: 元記事に <br> があっても新規の <script> は不合格（パターン単位の見逃しを避ける）', () => {
+  const originalWithBr = ORIGINAL.replace('ここに本文があります。\n', 'ここに本文があります。<br>\n');
+  const revisedWithScript = originalWithBr.replace('<br>\n', '<br>\n<script>alert(1)</script>\n');
+  const r = verifyChange({ original: originalWithBr, revised: revisedWithScript, pendingAction: pa(), candidate, config, fetchedDomains: [] });
+  assert.ok(checks(r).includes(4));
+});
+test('4 追加: 元記事と同数のタグ（<br> 1 個のまま）は誤検知しない', () => {
+  const originalWithBr = ORIGINAL.replace('ここに本文があります。\n', 'ここに本文があります。<br>\n');
+  const goodWithBr = originalWithBr.replace('    a: "答え一"\n', '    a: "答え一"\n  - q: "質問二"\n    a: "本文にある事実で答える"\n');
+  const r = verifyChange({ original: originalWithBr, revised: goodWithBr, pendingAction: pa(), candidate, config, fetchedDomains: [] });
+  assert.equal(r.ok, true);
+});
+test('4 追加: 双方向制御文字 \u202E の新出は不合格（A の書き戻しが範囲全体を守っている証拠）', () => {
+  assert.ok(checks(run(`${GOOD}\n見た目を偽装\u202Eする\n`)).includes(4));
 });
