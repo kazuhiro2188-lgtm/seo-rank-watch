@@ -8,7 +8,7 @@
   "contentFormat": "markdown-plain",
   "frontmatter": { "editable": ["title", "description", "faqs"], "updatedAtField": "updatedAt" },
   "build": { "command": "node build.mjs", "env": {}, "outputDir": "out" },
-  "deploy": { "type": "static-dir", "verifyFileTemplate": "out{path}.html", "timeoutMinutes": 1, "intervalSeconds": 1 },
+  "deploy": { "type": "static-dir", "verifyFileTemplate": "out{path}.html", "timeoutMinutes": 0.05, "intervalSeconds": 1 },
   "linkAllowlist": ["fixture.invalid"],
   "bannedWords": ["絶対に儲かる"],
   "limits": { "minImpressions": 30 },
