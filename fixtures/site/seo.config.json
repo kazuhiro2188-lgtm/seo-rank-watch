@@ -1,0 +1,16 @@
+{
+  "site": "sc-domain:fixture.invalid",
+  "baseUrl": "https://fixture.invalid",
+  "genre": "tech",
+  "language": "ja",
+  "contentDir": "content/articles",
+  "pathToFile": "content/articles/{path}.md",
+  "contentFormat": "markdown-plain",
+  "frontmatter": { "editable": ["title", "description", "faqs"], "updatedAtField": "updatedAt" },
+  "build": { "command": "node build.mjs", "env": {}, "outputDir": "out" },
+  "deploy": { "type": "static-dir", "verifyFileTemplate": "out{path}.html", "timeoutMinutes": 1, "intervalSeconds": 1 },
+  "linkAllowlist": ["fixture.invalid"],
+  "bannedWords": ["絶対に儲かる"],
+  "limits": { "minImpressions": 30 },
+  "keys": { "oauthIssuedOn": "2026-09-11", "gscKeyIssuedOn": "2026-09-11" }
+}
