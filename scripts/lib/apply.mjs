@@ -19,11 +19,18 @@ export function applyVerdicts(log, verdicts, today) {
     if (!e || v.verdict === 'pending') continue;
     if (v.verdict === 'achieved-check') { e.status = v.status; e.regressions = v.regressions; continue; }
     if (v.verdict === 'cooldown-end') { e.status = 'active'; e.cooldownUntil = null; continue; }
+    // 公開確認に到達しないまま放置されたもの。試行回数の話ではないので attempts / extensions は触らない
+    if (v.verdict === 'publish-unconfirmed') { markUnpublished(log, e.file, today); e.note = v.note ?? null; continue; }
     e.status = v.status; e.attempts = v.attempts; e.extensions = v.extensions;
     e.nextReviewDate = v.nextReviewDate ?? null; e.cooldownUntil = v.cooldownUntil ?? null;
     const last = e.actions?.at(-1);
     if (last) { last.verdict = v.verdict; last.verdictAt = today; last.before = v.before ?? null; last.after = v.after ?? null; }
-    if (v.revert && v.revertSha) reverts.push({ file: e.file, sha: v.revertSha });
+    if (v.revert) {
+      // SHA が無いのに status だけ reverted にすると、戻していない変更が本番に残ったまま
+      // 7 日後に active へ戻る。revert できないことを parked ＋ note で表に出す。
+      if (v.revertSha) reverts.push({ file: e.file, sha: v.revertSha });
+      else markRevertFailed(log, e.file, 'revert 対象のコミットが記録されていない');
+    }
   }
   return { reverts };
 }

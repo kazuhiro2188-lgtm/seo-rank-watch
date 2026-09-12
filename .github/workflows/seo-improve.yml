@@ -87,11 +87,21 @@ jobs:
           DISABLE_AUTOUPDATER: '1'
         run: |
           claude -p "$(cat /tmp/prompt.md)" \
-            --allowedTools "WebSearch,WebFetch,Write" \
-            --disallowedTools "Bash Read Edit NotebookEdit Glob Grep Task" \
+            --allowedTools "WebSearch,WebFetch,Write(/tmp/work/out/**)" \
+            --disallowedTools "Bash,Read,Edit,NotebookEdit,Glob,Grep,Task" \
             --max-turns 40 \
             --output-format stream-json --verbose \
             > /tmp/run.log || echo "claude が非ゼロで終了（検査に進む）"
+
+      - name: AI がリポジトリに触れていないことを確かめる（検査の迂回を防ぐ）
+        if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
+        run: |
+          changed="$(git status --porcelain)"
+          if [ -n "$changed" ]; then
+            echo "AI 実行後にリポジトリが変更されている。検査を迂回された可能性がある:" >&2
+            echo "$changed" >&2
+            exit 1
+          fi
 
       - name: 変更検査（AI を介さない）
         if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
@@ -198,6 +208,12 @@ jobs:
           if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" = "success" ]; then
             git add "$SEO_REPO/$FILE"
             git commit -m "seo: improve $FILE"
+            # ここでは apply.mjs change が書いた improvement-log.json がまだ未コミット。
+            # --autostash が無いと rebase が unstaged changes で必ず落ちる
+            git pull --rebase --autostash
+            git push
+            # SHA は push が済んでから確定させる。先に記録すると git pull --rebase で書き換わり、
+            # 7 日後の git revert が存在しないオブジェクトを指して必ず失敗する
             SHA="$(git rev-parse --short HEAD)"
             node "$SRW_DIR/scripts/apply.mjs" record-sha --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE" --sha "$SHA"
             echo "applied=true" >> "$GITHUB_OUTPUT"

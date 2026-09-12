@@ -1,12 +1,17 @@
-import { addDays } from './dates.mjs';
+import { addDays, daysBetween } from './dates.mjs';
 import { findSnapshot, latestSnapshot, rankFor } from './history.mjs';
 
-/** 観察開始日 S（公開確認日）から、比較する 2 つの 7 日窓の終端と判定日を出す。 */
-export function reviewDates(publishedVerifiedAt, lagDays = 3) {
+/**
+ * 観察開始日 S（公開確認日）から、比較する 2 つの 7 日窓の終端と判定日を出す。
+ * 延長（extensions）したときは後窓だけ 7 日ずつ後ろへ動かす。前窓は改善前の基準線なので据え置く。
+ * 後窓を動かさないと、延長しても毎回まったく同じ窓を読み直すだけで比較材料が増えない。
+ */
+export function reviewDates(publishedVerifiedAt, extensions = 0, lagDays = 3) {
+  const shift = 7 * extensions;
   return {
     beforeEnd: addDays(publishedVerifiedAt, -1),
-    afterEnd: addDays(publishedVerifiedAt, 7),
-    reviewDate: addDays(publishedVerifiedAt, 7 + lagDays),
+    afterEnd: addDays(publishedVerifiedAt, 7 + shift),
+    reviewDate: addDays(publishedVerifiedAt, 7 + shift + lagDays),
   };
 }
 
@@ -38,7 +43,7 @@ export function computeVerdicts({ log, snapshots, limits, today }) {
   for (const e of log.entries) {
     const kw = e.actions?.at(-1)?.keyword ?? e.keywords?.[0] ?? null;
     if (e.status === 'observing' && e.publishedVerifiedAt && e.nextReviewDate && e.nextReviewDate <= today) {
-      const d = reviewDates(e.publishedVerifiedAt);
+      const d = reviewDates(e.publishedVerifiedAt, e.extensions ?? 0);
       const afterSnap = findSnapshot(snapshots, 7, d.afterEnd);
       if (!afterSnap) { out.push({ file: e.file, keyword: kw, verdict: 'pending', status: 'observing', note: `終端 ${d.afterEnd} の 7 日窓がまだ無い（日次が止まっていないか確認）` }); continue; }
       const before = rankFor(findSnapshot(snapshots, 7, d.beforeEnd), kw);
@@ -52,6 +57,18 @@ export function computeVerdicts({ log, snapshots, limits, today }) {
         nextReviewDate: j.status === 'observing' ? addDays(today, 7) : null,
         cooldownUntil: j.status === 'reverted' ? addDays(today, 7) : null,
       });
+    } else if (e.status === 'observing' && !e.publishedVerifiedAt) {
+      // 記事の push は済んだのに公開確認ステップに到達しない（ジョブのタイムアウト・runner 死亡）と、
+      // 他のどの枝にも当たらず select からは locked で外れる。本番に載ったまま永久ロックになるので、
+      // 7 日超えたら unpublished（週次報告の「保留・要対応」に出る）に落として人に見せる。
+      const lastActionDate = e.actions?.at(-1)?.date ?? null;
+      const elapsed = lastActionDate ? daysBetween(lastActionDate, today) : 0;
+      if (lastActionDate && elapsed > 7) {
+        out.push({
+          file: e.file, keyword: kw, verdict: 'publish-unconfirmed', status: 'unpublished',
+          note: `公開確認に到達しないまま ${elapsed} 日経過。記事は push 済みの可能性がある`,
+        });
+      }
     } else if (e.status === 'achieved') {
       const latest = rankFor(latestSnapshot(snapshots, 7), kw);
       const r = judgeAchieved({ entry: e, latestRank: latest?.rank ?? null });

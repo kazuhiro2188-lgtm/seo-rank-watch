@@ -64,6 +64,12 @@ async function main() {
 
   const age = latestReportAge(args.repo, args.today);
   if (age !== null && age > 10) warnings.push(`最新の週次報告が ${age} 日前（週次が止まっている可能性）`);
+  // 報告が 1 本も無いと age は null になり、上の見張りは永久に鳴らない。
+  // ワークフローのコピー漏れ・週次の初回失敗が続いても日次だけ緑で回り続けるので、ここで拾う。
+  if (age === null) {
+    const daily = readHistory(historyPath).filter((s) => s.window.days === 7).length;
+    if (daily >= 10) warnings.push(`週次が一度も実行されていない（日次は ${daily} 回記録済み）`);
+  }
   if (args.warningsOut) writeFileSync(args.warningsOut, warnings.map((w) => `⚠️ ${w}`).join('\n') + (warnings.length ? '\n' : ''));
   for (const w of warnings) console.log(`⚠ ${w}`);
 }

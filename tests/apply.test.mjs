@@ -127,3 +127,29 @@ test('verdicts: 1件目の revert で --abort も失敗すると、2件目は実
   assert.equal(commitsAfter, commitsBefore, '2件目の revert は実際には試みられておらずコミットは増えていない');
   rmSync(dir, { recursive: true, force: true });
 });
+
+// レビュー Important 指摘の修正: worsened なのに revertSha が無い（記事コミットの SHA を記録できていない）とき、
+// 黙って revert を飛ばして status だけ reverted にすると、悪化した変更が本番に残ったまま 7 日後に active へ戻る。
+test('applyVerdicts: worsened でも revertSha が無ければ reverted にせず parked（revert 対象にも積まない）', () => {
+  const log = { entries: [{ file: 'content/articles/a.md', status: 'observing', attempts: 0, extensions: 0, actions: [{ keyword: 'k', commitSha: null, verdict: null }] }] };
+  const { reverts } = applyVerdicts(log, [{
+    file: 'content/articles/a.md', keyword: 'k', verdict: 'worsened', status: 'reverted',
+    attempts: 1, extensions: 0, revert: true, revertSha: null, cooldownUntil: '2026-10-05',
+  }], '2026-09-28');
+  assert.deepEqual(reverts, [], 'revert 対象に積まない');
+  const e = log.entries[0];
+  assert.equal(e.status, 'parked', '戻していないのに「戻した」ことにしない');
+  assert.match(e.note, /revert 対象のコミットが記録されていない/);
+});
+
+test('applyVerdicts: publish-unconfirmed は unpublished にし、attempts/extensions は触らない', () => {
+  const log = { entries: [{ file: 'content/articles/a.md', status: 'observing', attempts: 2, extensions: 1, actions: [{ keyword: 'k', commitSha: 'abc1234', verdict: null }] }] };
+  const { reverts } = applyVerdicts(log, [{
+    file: 'content/articles/a.md', keyword: 'k', verdict: 'publish-unconfirmed', status: 'unpublished',
+    note: '公開確認に到達しないまま 8 日経過。記事は push 済みの可能性がある',
+  }], '2026-09-26');
+  const e = log.entries[0];
+  assert.deepEqual([e.status, e.attempts, e.extensions], ['unpublished', 2, 1]);
+  assert.match(e.note, /公開確認に到達しないまま/);
+  assert.deepEqual(reverts, []);
+});

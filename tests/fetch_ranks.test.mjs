@@ -59,3 +59,28 @@ test('日次: 最新の週次報告が 10 日より古ければ warnings に 1 �
   assert.match(readFileSync(w, 'utf8'), /週次報告が 22 日前/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+// レビュー Important 指摘の修正: reports が空/無いと latestReportAge は null を返し、
+// age !== null の条件で警告が抑止される。ワークフローのコピー漏れや週次の初回失敗が続くと、
+// 日次は毎日緑で回り続け、Slack には何も出ない（見張りが永久に鳴らない）。
+test('日次: 週次が一度も実行されていなくても、日次の記録が 10 件以上あれば warnings に 1 行書く', () => {
+  const dir = site();
+  const path = join(dir, 'data/seo/rank-history.jsonl');
+  const w = join(dir, 'warnings.txt');
+  const rows = (n) => `${Array.from({ length: n }, (_, i) => JSON.stringify({
+    fetchedAt: '2026-08-01T00:00:00.000Z',
+    window: { days: 7, startDate: '2026-08-01', endDate: `2026-08-${String(i + 1).padStart(2, '0')}` },
+    ranks: [], pageQueries: [],
+  })).join('\n')}\n`;
+
+  writeFileSync(path, rows(8)); // 今回の追記を入れても 9 件。10 に届かない
+  let r = run(dir, '--today', '2026-09-11', '--warnings-out', w);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(/週次が一度も実行されていない/.test(readFileSync(w, 'utf8')), false, '記録が少ないうちは出さない');
+
+  writeFileSync(path, rows(12));
+  r = run(dir, '--today', '2026-09-11', '--warnings-out', w);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(readFileSync(w, 'utf8'), /週次が一度も実行されていない（日次は 13 回記録済み）/);
+  rmSync(dir, { recursive: true, force: true });
+});
