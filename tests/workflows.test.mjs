@@ -170,7 +170,10 @@ test('AI に渡す道具: allowedTools / disallowedTools の値（claude -p の�
     assert.ok(i >= 0, `${p}: claude -p を含むステップが無い`);
     const allowed = flagValue(steps[i].run, '--allowedTools');
     const disallowed = flagValue(steps[i].run, '--disallowedTools');
-    assert.equal(allowed, 'WebSearch,WebFetch,Write(/tmp/work/out/**)', `${p}: Write がパス無制限`);
+    // Write はパスで絞れない: `Write(/path/**)` は file permission checks に使われず（CLI が明示）、
+    // `Write` と `Edit(/path/**)` の併記でも範囲外に書けてしまう（2026-09-12 実測）。柵は素の Write を許可し、
+    // 実効的な検査は直後の「AI がリポジトリに触れていないことを確かめる」ステップに委ねる。
+    assert.equal(allowed, 'WebSearch,WebFetch,Write', `${p}: Write をパスで絞ろうとしている（実測では書き込みそのものが失敗する）`);
     assert.equal(disallowed, 'Bash,Read,Edit,NotebookEdit,Glob,Grep,Task', `${p}: コンマ区切りでない`);
     assert.equal(/[ \t]/.test(disallowed ?? ' '), false, `${p}: disallowedTools に空白が混ざっている（1 個のツール名と解釈される）`);
   }
@@ -202,5 +205,23 @@ test('revert 用の SHA は push 後に記録する（同じステップの中�
     const firstPull = lines.findIndex((l) => /git pull --rebase/.test(l));
     assert.ok(firstPull >= 0 && firstPull < record, `${p}: push 前の git pull --rebase が無い`);
     assert.match(lines[firstPull], /--autostash/, `${p}: 記事を push する前の git pull --rebase に --autostash が無い（improvement-log.json が未コミットのままなので必ず失敗する）`);
+  }
+});
+
+test('記事のコミットとログのコミットは、どちらも最初の push より前にある（記事だけ公開されログが残らない窓を塞ぐ・両方の YAML）', () => {
+  for (const p of IMPROVE) {
+    const steps = stepsOf(p);
+    // 「変更を書き戻す」ステップは record-sha も含むので、既存の表明と同じ探し方で拾える
+    const i = stepIndex(steps, 'record-sha');
+    assert.ok(i >= 0, `${p}: 変更を書き戻すステップが無い`);
+    const lines = steps[i].run.split('\n');
+    const push = lines.findIndex((l) => /(^|\s)git push(\s|$)/.test(l));
+    const articleCommit = lines.findIndex((l) => l.includes('seo: improve'));
+    const logCommit = lines.findIndex((l) => l.includes('seo: record') && !l.includes('record sha'));
+    assert.ok(push >= 0, `${p}: git push が見つからない`);
+    assert.ok(articleCommit >= 0, `${p}: 記事のコミット（seo: improve）が見つからない`);
+    assert.ok(logCommit >= 0, `${p}: ログのコミット（seo: record）が見つからない`);
+    assert.ok(articleCommit < push, `${p}: 記事のコミット（${articleCommit + 1} 行目）が最初の push（${push + 1} 行目）より後`);
+    assert.ok(logCommit < push, `${p}: ログのコミット（${logCommit + 1} 行目）が最初の push（${push + 1} 行目）より後。ここが push より後だと、2 回目の push 失敗やジョブ停止で記事だけ本番に残り improvement-log.json には何も記録が残らない`);
   }
 });

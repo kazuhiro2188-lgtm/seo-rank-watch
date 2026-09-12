@@ -86,8 +86,11 @@ jobs:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           DISABLE_AUTOUPDATER: '1'
         run: |
+          # Write はパスで絞れない。`Write(/path/**)` は file permission checks に使われず（CLI が明示）、
+          # `Write` と `Edit(/path/**)` を併記すると書けるが範囲外にも書ける（2026-09-12 実測）。
+          # 実効的な柵は、この直後の「AI がリポジトリに触れていないことを確かめる」ステップ。
           claude -p "$(cat /tmp/prompt.md)" \
-            --allowedTools "WebSearch,WebFetch,Write(/tmp/work/out/**)" \
+            --allowedTools "WebSearch,WebFetch,Write" \
             --disallowedTools "Bash,Read,Edit,NotebookEdit,Glob,Grep,Task" \
             --max-turns 40 \
             --output-format stream-json --verbose \
@@ -216,7 +219,7 @@ jobs:
       - name: 判定を反映する（悪化は git revert）
         run: node "$SRW_DIR/scripts/apply.mjs" verdicts --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --verdicts /tmp/srw/verdicts.json
 
-      - name: 変更を書き戻す（pass かつビルド成功のときだけ）。記事とログは別コミット
+      - name: 変更を書き戻す（pass かつビルド成功のときだけ）。記事とログは別コミット・ログは記事の直後に積んで最初の push に含める
         id: change
         run: |
           node "$SRW_DIR/scripts/apply.mjs" change --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" \
@@ -225,22 +228,28 @@ jobs:
           if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" = "success" ]; then
             git add "$SEO_REPO/$FILE"
             git commit -m "seo: improve $FILE"
-            # ここでは apply.mjs change が書いた improvement-log.json がまだ未コミット。
-            # --autostash が無いと rebase が unstaged changes で必ず落ちる
+          fi
+          # commitSha はまだ入っていないが、記事の直後にここでコミットして最初の push に含める。
+          # これが無いと「記事だけが公開され improvement-log.json には何も残らない」窓ができる
+          # （2 回目の push が失敗・またはジョブがここで死ぬと、記事は本番に載るがログはどこにも残らない）。
+          git add "$SEO_REPO/data/seo/improvement-log.json"
+          git commit -m "seo: record ${{ needs.think.outputs.today }}" || echo "ログに変更なし"
+          # --autostash が無いと rebase が unstaged changes で必ず落ちる
+          git pull --rebase --autostash
+          git push
+          if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" = "success" ]; then
+            # 記事コミットの SHA は push が済んでから確定させる（rebase で書き換わりうるため）。
+            # ログのコミットを記事の直後に積んでいるので、記事は今の HEAD の 1 つ前を指す。
+            ARTICLE_SHA="$(git rev-parse --short HEAD~1)"
+            node "$SRW_DIR/scripts/apply.mjs" record-sha --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE" --sha "$ARTICLE_SHA"
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+            git add "$SEO_REPO/data/seo/improvement-log.json"
+            git commit -m "seo: record sha ${{ needs.think.outputs.today }}"
             git pull --rebase --autostash
             git push
-            # SHA は push が済んでから確定させる。先に記録すると git pull --rebase で書き換わり、
-            # 7 日後の git revert が存在しないオブジェクトを指して必ず失敗する
-            SHA="$(git rev-parse --short HEAD)"
-            node "$SRW_DIR/scripts/apply.mjs" record-sha --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE" --sha "$SHA"
-            echo "applied=true" >> "$GITHUB_OUTPUT"
           else
             echo "applied=false" >> "$GITHUB_OUTPUT"
           fi
-          git add "$SEO_REPO/data/seo/improvement-log.json"
-          git commit -m "seo: record ${{ needs.think.outputs.today }}" || echo "ログに変更なし"
-          git pull --rebase
-          git push
 
       - name: 公開を確認する（static-dir はここでビルド）
         id: pub
