@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, cpSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -71,5 +71,59 @@ test('change: outcome.candidate が null（検査の前提を読めなかった�
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /検査の前提を読めなかったため記録をスキップした/);
   assert.equal(existsSync(join(dir, 'data/seo/improvement-log.json')), false, 'improvement-log.json が新規に作られていないこと');
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// レビュー Important 指摘の修正: 1 件目の revert が失敗し、その --abort 自体も失敗すると
+// 作業ツリーが「revert 途中」のまま戻せなくなる。以後の revert は git を呼ばずに打ち切り、
+// 「先行する revert の中断に失敗したため実行していない」という理由で parked にする。
+// 単独なら成功するはずの 2 件目（実在するクリーンなコミット）が、実際には revert されていない
+// （コミット数が増えていない）ことまで確認する。
+test('verdicts: 1件目の revert で --abort も失敗すると、2件目は実行せず parked にする', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'srw-revert-'));
+  cpSync(SITE, dir, { recursive: true });
+  execFileSync('git', ['init', '-q'], { cwd: dir });
+  execFileSync('git', ['config', 'user.email', 'test@test.local'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'test'], { cwd: dir });
+  execFileSync('git', ['add', '-A'], { cwd: dir });
+  execFileSync('git', ['commit', '-qm', 'initial'], { cwd: dir });
+
+  const fileA = 'content/articles/first-run.md';
+  const fileB = 'content/articles/second-topic.md';
+  // fileB は単独なら綺麗に revert できる実コミットを作る
+  writeFileSync(join(dir, fileB), `${readFileSync(join(dir, fileB), 'utf8')}\n追記\n`);
+  execFileSync('git', ['add', fileB], { cwd: dir });
+  execFileSync('git', ['commit', '-qm', 'commitB'], { cwd: dir });
+  const shaB = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+  const commitsBefore = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+
+  // 存在しない SHA。revert 自体が「対象が無い」で失敗し、revert 作業も始まらないので --abort も必ず失敗する
+  const badSha = 'deadbeef0000000000000000000000000000000';
+
+  writeFileSync(join(dir, 'data/seo/improvement-log.json'), JSON.stringify({
+    entries: [
+      { file: fileA, status: 'observing', attempts: 0, extensions: 0, actions: [{ keyword: 'kA', commitSha: badSha, verdict: null }] },
+      { file: fileB, status: 'observing', attempts: 0, extensions: 0, actions: [{ keyword: 'kB', commitSha: shaB, verdict: null }] },
+    ],
+  }));
+  const verdicts = [
+    { file: fileA, keyword: 'kA', verdict: 'worsened', status: 'reverted', attempts: 1, extensions: 0, revert: true, revertSha: badSha, cooldownUntil: '2026-10-05' },
+    { file: fileB, keyword: 'kB', verdict: 'worsened', status: 'reverted', attempts: 1, extensions: 0, revert: true, revertSha: shaB, cooldownUntil: '2026-10-05' },
+  ];
+  writeFileSync(join(dir, 'verdicts.json'), JSON.stringify(verdicts));
+
+  const r = spawnSync(process.execPath, [APPLY_CLI, 'verdicts', '--repo', dir, '--today', '2026-09-28', '--verdicts', join(dir, 'verdicts.json')], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+
+  const log = JSON.parse(readFileSync(join(dir, 'data/seo/improvement-log.json'), 'utf8'));
+  const eA = log.entries.find((e) => e.file === fileA);
+  const eB = log.entries.find((e) => e.file === fileB);
+  assert.equal(eA.status, 'parked', '1件目は revert 失敗で parked');
+  assert.match(eA.note, /revert に失敗/);
+  assert.equal(eB.status, 'parked', '2件目も打ち切りにより parked');
+  assert.match(eB.note, /先行する revert の中断に失敗したため、この revert は実行していない/, '2件目は「打ち切り」理由で parked（単独なら成功するはずだった）');
+
+  const commitsAfter = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+  assert.equal(commitsAfter, commitsBefore, '2件目の revert は実際には試みられておらずコミットは増えていない');
   rmSync(dir, { recursive: true, force: true });
 });

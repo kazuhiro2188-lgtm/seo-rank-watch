@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 書く段。improvement-log と記事ファイルを書き換える唯一の場所。git add / commit はワークフローが行う。
-import { readFileSync, writeFileSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { loadConfig } from './lib/config.mjs';
@@ -21,9 +21,23 @@ const git = (...a) => execFileSync('git', a, { cwd: args.repo, stdio: 'pipe' }).
 if (sub === 'verdicts') {
   const verdicts = JSON.parse(readFileSync(args.verdicts, 'utf8'));
   const { reverts } = applyVerdicts(log, verdicts, args.today);
+  let aborted = false; // --abort に失敗して作業ツリーが戻せない
   for (const r of reverts) {
-    try { git('revert', '--no-edit', r.sha); console.log(`revert: ${r.file} ← ${r.sha}`); }
-    catch (e) { try { git('revert', '--abort'); } catch {} markRevertFailed(log, r.file, e.message.split('\n')[0]); console.error(`revert 失敗: ${r.file}（parked にした）`); }
+    if (aborted) {
+      markRevertFailed(log, r.file, '先行する revert の中断に失敗したため、この revert は実行していない');
+      console.error(`revert 未実行: ${r.file}（作業ツリーが戻せないため打ち切り）`);
+      continue;
+    }
+    try {
+      git('revert', '--no-edit', r.sha);
+      console.log(`revert: ${r.file} ← ${r.sha}`);
+    } catch (e) {
+      const reason = e.message.split('\n')[0];
+      try { git('revert', '--abort'); }
+      catch { aborted = true; }
+      markRevertFailed(log, r.file, reason);
+      console.error(`revert 失敗: ${r.file}（parked にした）`);
+    }
   }
   console.log(`判定 ${verdicts.length} 件を反映（revert ${reverts.length} 件）`);
 } else if (sub === 'change') {
