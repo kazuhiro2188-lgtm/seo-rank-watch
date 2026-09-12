@@ -24,6 +24,15 @@ test('validateConfig は必須欠落・未対応形式・{path} 無しを例外�
   assert.throws(() => validateConfig({ ...base, pathToFile: 'content/x.md' }), /\{path\}/);
   assert.throws(() => validateConfig({ ...base, deploy: { type: 'ftp' } }), /deploy\.type/);
 });
+test('validateConfig は build.outputDir が空文字・.・.. を含む場合を例外で落とす（後始末の範囲になるため）', () => {
+  for (const outputDir of ['', '   ', '.', './', '..', 'out/..', '../out']) {
+    assert.throws(() => validateConfig({ ...base, build: { command: 'true', outputDir } }), /ビルド専用のディレクトリ/, `outputDir: ${JSON.stringify(outputDir)} が通ってしまう`);
+  }
+  // 普通のビルド出力と、未指定（既定 out）は通る
+  assert.equal(validateConfig({ ...base, build: { command: 'true', outputDir: 'out' } }).build.outputDir, 'out');
+  assert.equal(validateConfig({ ...base, build: { command: 'true', outputDir: './dist' } }).build.outputDir, './dist');
+  assert.equal(validateConfig({ ...base, build: { command: 'true' } }).build.outputDir, undefined);
+});
 test('resolveFile はパスをファイルに写す。トップと .. は null', () => {
   const c = validateConfig(base);
   assert.equal(resolveFile(c, '/claude-code-subagent'), 'content/articles/claude-code-subagent.md');

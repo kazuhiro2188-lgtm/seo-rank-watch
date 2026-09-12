@@ -159,9 +159,26 @@ jobs:
         with:
           name: srw-run
           path: /tmp/srw
-      - name: 直した 1 ファイルを当ててビルドする（秘密は一切持たない）
+      - name: 直した 1 ファイルを当てて updatedAt を刻む（書き戻しと同じバイトにする）
         run: |
           cp /tmp/srw/work/out/article.md "$SEO_REPO/${{ needs.think.outputs.file }}"
+          # apply.mjs change が書き戻し時に刻むのと同じ updatedAt を、ビルドの前にここでも刻む。
+          # 省くと「ビルドで試したバイト」と「push するバイト」が 1 行ずれ、updatedAt を厳格に検証する
+          # サイトではこの段が緑でも本番のビルドだけが落ちる。
+          node -e '
+            const { readFileSync, writeFileSync } = require("node:fs");
+            const { pathToFileURL } = require("node:url");
+            const [file, cfgPath, today, lib] = process.argv.slice(1);
+            const field = (JSON.parse(readFileSync(cfgPath, "utf8")).frontmatter ?? {}).updatedAtField ?? "updatedAt";
+            import(pathToFileURL(lib).href).then(({ setUpdatedAt }) => {
+              writeFileSync(file, setUpdatedAt(readFileSync(file, "utf8"), field, today));
+              console.log(`${field}: ${today} を刻んだ`);
+            });
+          ' "$SEO_REPO/${{ needs.think.outputs.file }}" "$SEO_REPO/seo.config.json" \
+            "${{ needs.think.outputs.today }}" "$SRW_DIR/scripts/lib/apply.mjs"
+
+      - name: ビルドする（秘密は一切持たない）
+        run: |
           cd "$SEO_REPO"
           node -e '
             const c = require("./seo.config.json");

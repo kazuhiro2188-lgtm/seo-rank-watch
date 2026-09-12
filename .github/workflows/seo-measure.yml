@@ -14,7 +14,7 @@ concurrency:
 
 env:
   SRW_DIR: .
-  SEO_REPO: fixtures/site
+  SEO_REPO: selftest/site   # 定期実行が書き換えてよい自己試験用の複製。fixtures/site はテストが読むので触らせない
   SEO_SOURCE: fixture
 
 jobs:

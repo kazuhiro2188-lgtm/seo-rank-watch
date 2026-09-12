@@ -43,3 +43,5 @@
 ## 開発
 
 `node --test`（通し試験 `tests/e2e.test.mjs` を含む）。npm 依存ゼロ。
+
+サイトの複製は 2 つある。`fixtures/site/` は**テストが読む固定の入力**で、`selftest/site/` は**このリポジトリ自身の定期実行（`.github/workflows/`）が書き換える自己試験用**。定期実行に書き換えられるのは後者だけで、`fixtures/site/` は誰も書き換えない（書き換わるとテストが翌日に赤くなる）。

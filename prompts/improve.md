@@ -58,6 +58,8 @@
 }
 ```
 
+`proposals` と `needsAuthor` はそれぞれ**最大 5 件・1 件 200 字以内**。超えると検査で不合格になり、改善は書き戻されない。
+
 `editType` は `title` `description` `intro` `faq` `structure` `update` `internal-link` のどれか 1 つ。順位が上がると断定しない。何を変えたかだけを書く。
 
 ## 対象記事の現在の全文

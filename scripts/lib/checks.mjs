@@ -12,12 +12,14 @@ const FORBIDDEN_CONTENT = [
   [/display\s*:\s*none|font-size\s*:\s*0/i, '隠しスタイル'],
   [/[A-Za-z0-9+/]{120,}={0,2}/, 'base64 の塊'],
 ];
-const SECRET_PATTERNS = [/sk-ant-/, /\bgh[po]_[A-Za-z0-9]{20,}/, /github_pat_/, /xox[baprs]-/, /hooks\.slack\.com\/services\//, /-----BEGIN/, /AIza[0-9A-Za-z_-]{20,}/];
+export const SECRET_PATTERNS = [/sk-ant-/, /\bgh[po]_[A-Za-z0-9]{20,}/, /github_pat_/, /xox[baprs]-/, /hooks\.slack\.com\/services\//, /-----BEGIN/, /AIza[0-9A-Za-z_-]{20,}/];
 const CONTACT_PATTERNS = [
   [/[\w.+-]+@[\w-]+\.[\w.]+/, 'メールアドレス'],
   [/0\d{1,4}-\d{1,4}-\d{3,4}/, '電話番号'],
   [/\b(0x[0-9a-fA-F]{40}|[13][a-km-zA-HJ-NP-Z1-9]{25,34}|bc1[a-z0-9]{25,})\b/, '暗号資産アドレス'],
 ];
+const MAX_FREE_TEXT_ITEMS = 5;   // proposals / needsAuthor の件数上限
+const MAX_FREE_TEXT_CHARS = 200; // 同・1 件あたりの文字数上限
 const EDIT_TYPES = ['title', 'description', 'intro', 'faq', 'structure', 'update', 'internal-link'];
 const URL_RE = /https?:\/\/[^\s"'<>)\]]+/g;
 
@@ -78,8 +80,12 @@ export function verifyChange({ original, revised, pendingAction, candidate, conf
     if (origUrls.includes(u)) continue;
     const dm = domainOf(u);
     if (!dm) continue;
+    // 許可リストの判定が先。候補は「自ページが 2〜10 位で出ている語」なので、AI が WebSearch すれば
+    // 自ドメインの URL がほぼ必ず tool_result に混ざり fetched に入る。先に fetched を見ると
+    // 自サイトへの絶対 URL リンク（internal-link）が誤った理由で封じられる。
+    if (allowed.has(dm)) continue;
     if (fetched.has(dm)) fail(3, `AI が読んだページのドメインが新出: ${dm}`);
-    else if (!allowed.has(dm)) fail(3, `許可されていないドメイン: ${dm}`);
+    else fail(3, `許可されていないドメイン: ${dm}`);
   }
   if (/\brel=|\btarget=/.test(revised) && !/\brel=|\btarget=/.test(original)) fail(3, 'rel/target の新出');
 
@@ -117,7 +123,13 @@ export function verifyChange({ original, revised, pendingAction, candidate, conf
   if (!EDIT_TYPES.includes(pa.editType)) fail(8, `editType が不正: ${pa.editType}`);
   if (candidate.avoidEditType && pa.editType === candidate.avoidEditType) fail(8, `前回と同じ editType（${pa.editType}）`);
   for (const f of ['needs', 'done']) if (typeof pa[f] !== 'string' || !pa[f].trim() || pa[f].length > 400) fail(8, `${f} が無い／長すぎる`);
-  for (const f of ['proposals', 'needsAuthor']) if (!Array.isArray(pa[f])) fail(8, `${f} は配列`);
+  // proposals / needsAuthor は AI 由来の任意テキストで、improvement-log と公開リポジトリの報告に入る。
+  // 配列であることだけでは歯止めにならないので件数と長さも見る。
+  for (const f of ['proposals', 'needsAuthor']) {
+    if (!Array.isArray(pa[f])) { fail(8, `${f} は配列`); continue; }
+    if (pa[f].length > MAX_FREE_TEXT_ITEMS) fail(8, `${f} が ${pa[f].length} 件（上限 ${MAX_FREE_TEXT_ITEMS} 件）`);
+    for (const v of pa[f]) if (typeof v !== 'string' || v.length > MAX_FREE_TEXT_CHARS) fail(8, `${f} の 1 件が文字列でないか ${MAX_FREE_TEXT_CHARS} 字を超える`);
+  }
 
   return { ok: failures.length === 0, failures };
 }

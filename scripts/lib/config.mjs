@@ -17,6 +17,14 @@ export function validateConfig(raw) {
   if (!String(raw.pathToFile).includes('{path}')) throw new Error('pathToFile には {path} を含めてください');
   if (!Array.isArray(raw.frontmatter.editable)) throw new Error('frontmatter.editable は配列です');
   if (!['git-push', 'static-dir'].includes(raw.deploy?.type)) throw new Error(`deploy.type は git-push か static-dir です（指定: ${raw.deploy?.type}）`);
+  // outputDir はビルド出力の置き場であると同時に「後始末してよい範囲」でもある。
+  // リポジトリ直下や親を指されると、導入検査の後始末がリポジトリ側のファイルを消しにいく。
+  if (raw.build?.outputDir !== undefined) {
+    const segs = String(raw.build.outputDir).split('/').filter((x) => x !== '');
+    if (!String(raw.build.outputDir).trim() || !segs.length || segs.every((x) => x === '.') || segs.includes('..')) {
+      throw new Error('build.outputDir は out や dist のようなビルド専用のディレクトリを指してください');
+    }
+  }
   return {
     language: 'ja', linkAllowlist: [], bannedWords: [], country: null,
     ...raw,

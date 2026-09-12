@@ -1,0 +1,7 @@
+{
+  "keywords": [
+    { "keyword": "試験 キーワード 一番", "targetPath": "/first-run", "priority": "high" },
+    { "keyword": "試験 キーワード 二番", "targetPath": "/second-topic", "priority": "normal" },
+    { "keyword": "試験 トップ", "targetPath": "/", "priority": "normal" }
+  ]
+}

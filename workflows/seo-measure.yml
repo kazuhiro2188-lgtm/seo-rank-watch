@@ -14,7 +14,7 @@ concurrency:
 
 env:
   SRW_DIR: .seo-rank-watch # スクリプトの置き場（製品リポジトリ自身では .）
-  SEO_REPO: .              # サイトのルート（製品リポジトリ自身では fixtures/site）
+  SEO_REPO: .              # サイトのルート（製品リポジトリ自身では selftest/site）
   SEO_SOURCE: gsc          # gsc | fixture
 
 jobs:

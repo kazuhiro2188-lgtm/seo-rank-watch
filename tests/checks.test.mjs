@@ -55,6 +55,13 @@ test('3 外部リンク: 許可外ドメイン・AI が読んだドメイン・�
   assert.ok(checks(run(GOOD.replace('aff?id=ABC123', 'aff?id=EVIL999'))).includes(3), 'アフィリエイト ID の差し替え');
   assert.equal(run(`${GOOD}\n関連: https://mysite.invalid/another\n`).ok, true);
 });
+test('3 追加: fetchedDomains に自ドメインが入っていても、自サイトへの絶対 URL リンクは合格（許可リストが先）', () => {
+  // 候補は「自ページが 2〜10 位で出ている語」なので、AI が WebSearch すれば tool_result に
+  // 自ドメインの URL がほぼ必ず含まれ、fetchedDomains に自ドメインが入る。
+  const r = run(`${GOOD}\n関連: https://mysite.invalid/another\n`, {}, ['mysite.invalid', 'rival.example']);
+  assert.deepEqual(r.failures, []);
+  assert.equal(r.ok, true);
+});
 test('4 実行可能・隠しコンテンツ: HTML タグ・テンプレート構文・ゼロ幅文字は不合格。コードフェンス内は許す', () => {
   assert.ok(checks(run(`${GOOD}\n<script>alert(1)</script>\n`)).includes(4));
   assert.ok(checks(run(`${GOOD}\n<a href="/x">link</a>\n`)).includes(4));
@@ -105,4 +112,13 @@ test('4 追加: 元記事と同数のタグ（<br> 1 個のまま）は誤検知
 });
 test('4 追加: 双方向制御文字 \u202E の新出は不合格（A の書き戻しが範囲全体を守っている証拠）', () => {
   assert.ok(checks(run(`${GOOD}\n見た目を偽装\u202Eする\n`)).includes(4));
+});
+test('8 追加: proposals / needsAuthor は 5 件まで・1 件 200 字まで（AI 由来のテキストが無検査で報告に入る経路）', () => {
+  const six = Array.from({ length: 6 }, (_, i) => `質問 ${i}`);
+  assert.ok(checks(run(GOOD, { pa: { needsAuthor: six } })).includes(8), 'needsAuthor 6 件');
+  assert.ok(checks(run(GOOD, { pa: { proposals: six } })).includes(8), 'proposals 6 件');
+  assert.ok(checks(run(GOOD, { pa: { needsAuthor: ['あ'.repeat(201)] } })).includes(8), 'needsAuthor 1 件が 201 字');
+  assert.ok(checks(run(GOOD, { pa: { proposals: ['あ'.repeat(201)] } })).includes(8), 'proposals 1 件が 201 字');
+  // 境界のちょうどは合格（5 件・200 字）
+  assert.equal(run(GOOD, { pa: { needsAuthor: six.slice(0, 5), proposals: ['あ'.repeat(200)] } }).ok, true);
 });

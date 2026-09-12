@@ -1,0 +1,8 @@
+{
+  "default": [
+    { "query": "試験 キーワード 一番", "page": "https://fixture.invalid/first-run", "clicks": 12, "impressions": 120, "position": 4.0 },
+    { "query": "試験 キーワード 一番 やり方", "page": "https://fixture.invalid/first-run", "clicks": 3, "impressions": 40, "position": 6.0 },
+    { "query": "試験 キーワード 二番", "page": "https://fixture.invalid/second-topic", "clicks": 1, "impressions": 50, "position": 15.0 }
+  ],
+  "fromEndDate": {}
+}

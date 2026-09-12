@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 導入検査。設定・監視語・.gitignore・（--with-build で）生 HTML の無効化とビルド出力を確かめる。
 import { readFileSync, writeFileSync, existsSync, rmSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execSync } from 'node:child_process';
 import { loadConfig, resolveFile } from './lib/config.mjs';
 
@@ -52,21 +52,25 @@ for (const k of ['oauthIssuedOn', 'gscKeyIssuedOn']) if (config.keys[k]) ok(`key
 
 if (args.withBuild) {
   const probe = join(args.repo, config.contentDir, 'zz-srw-probe.md');
+  // 絶対パスの outputDir も素直に扱えるよう resolve で解く（join だとリポジトリ直下に継ぎ足されてしまう）。
+  const outDir = resolve(args.repo, config.build.outputDir ?? 'out');
   writeFileSync(probe, `---\ntitle: "probe"\ndescription: "probe"\nkeyword: "probe"\npublishedAt: "2026-01-01"\ndraft: false\nfaqs: []\n---\n\n<script>alert("srw-probe")</script>\n`);
   try {
     execSync(config.build.command, { cwd: args.repo, env: { ...process.env, ...(config.build.env ?? {}) }, stdio: 'pipe' });
-    const outDir = join(args.repo, config.build.outputDir ?? 'out');
     const files = walkFiles(outDir);
     const raw = files.some((p) => /\.html?$/.test(p) && readFileSync(p, 'utf8').includes('<script>alert("srw-probe")</script>'));
     if (raw) ng('生 HTML がそのまま出力される（サイト側で無効化が必要）'); else ok('生 HTML はエスケープされる');
     if (existsSync(join(outDir, 'data/seo')) || files.some((p) => p.includes('rank-history'))) ng('ビルド出力に data/seo が含まれる'); else ok('ビルド出力に data/seo は含まれない');
   } catch (e) { ng(`ビルド失敗: ${String(e.message).split('\n')[0]}`); }
   finally {
-    rmSync(probe, { force: true });
+    // 探り針そのものの削除。ここで例外が出ると以降の後始末も総括も飛ぶので、単独で保護する。
+    try { rmSync(probe, { force: true }); } catch (e) { warn(`探り針 ${probe} を削除できなかった。手で消すこと: ${e.message}`); }
     // 探り針（zz-srw-probe）由来のビルド出力も後始末する。ファイル名の対応規則はサイトごとに違うため、
     // 中身に「srw-probe」を含むかどうかで判定する。ここで例外を投げると検査全体が落ちるため、丸ごと保護する。
-    try {
-      const outDir = join(args.repo, config.build.outputDir ?? 'out');
+    // ただし outputDir がリポジトリ直下を指していると、この走査は「ビルド出力」ではなくリポジトリ全体を
+    // 掘り、srw-probe の語を含むファイル（このスクリプト自身を含む）を消してしまう。その場合は何もしない。
+    if (outDir === resolve(args.repo)) warn('build.outputDir がリポジトリ直下を指しているため、ビルド出力の後始末を行わない');
+    else try {
       if (existsSync(outDir)) {
         const leftover = walkFiles(outDir).filter((p) => {
           try { return readFileSync(p, 'utf8').includes('srw-probe'); } catch { return false; }
