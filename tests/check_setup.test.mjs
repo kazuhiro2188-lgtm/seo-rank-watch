@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
+const SITE = new URL('../fixtures/site/', import.meta.url).pathname;
+const CLI = new URL('../scripts/check_setup.mjs', import.meta.url).pathname;
+const site = () => { const d = mkdtempSync(join(tmpdir(), 'srw-setup-')); cpSync(SITE, d, { recursive: true }); return d; };
+const run = (dir, ...a) => spawnSync(process.execPath, [CLI, '--repo', dir, ...a], { encoding: 'utf8' });
+
+test('試験用サイトは導入検査に合格する（トップページの監視語は警告）', () => {
+  const dir = site();
+  const r = run(dir, '--with-build');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /✓ 生 HTML はエスケープされる/);
+  assert.match(r.stdout, /⚠ 試験 トップ: 対象パス \/ はファイルに対応しない/);
+  rmSync(dir, { recursive: true, force: true });
+});
+test('.gitignore に .env が無ければ不合格、監視語のファイルが無ければ不合格', () => {
+  const dir = site();
+  writeFileSync(join(dir, '.gitignore'), 'out/\n');
+  writeFileSync(join(dir, 'data/seo/watchwords.json'), JSON.stringify({ keywords: [{ keyword: 'x', targetPath: '/nope', priority: 'high' }] }));
+  const r = run(dir);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout, /✗ \.gitignore/);
+  assert.match(r.stdout, /✗ x: content\/articles\/nope\.md が無い/);
+  rmSync(dir, { recursive: true, force: true });
+});
