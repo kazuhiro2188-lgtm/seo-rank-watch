@@ -10,16 +10,20 @@
 - 既定ブランチへ push すると自動デプロイされる（Vercel / Netlify / Cloudflare Pages 等）
 - 金融・医療・法律（YMYL）ではない
 
-## 導入（30 分）
+## 導入（Google Cloud と Slack の準備が済んでいれば 30 分）
 
 1. このリポジトリの `scripts/` と `prompts/` を、対象サイトの `.seo-rank-watch/` にコピーする
    `cp -r scripts prompts <site>/.seo-rank-watch/`
 2. `<site>/seo.config.json` を書く（雛形: `fixtures/site/seo.config.json`。`deploy.type` は `git-push`、`verifyUrlTemplate` は本番 URL）
 3. `<site>/data/seo/watchwords.json` に監視語を **`targetPath` 付きで**登録する
 4. `node .seo-rank-watch/scripts/check_setup.mjs --repo . --with-build` を通す
-5. GitHub Secrets に登録: `CLAUDE_CODE_OAUTH_TOKEN`（`claude setup-token`）/ `GSC_SERVICE_ACCOUNT_EMAIL` / `GSC_SERVICE_ACCOUNT_PRIVATE_KEY`（Search Console に「制限付き」で追加したサービスアカウント）/ `SLACK_WEBHOOK_URL`
-6. `workflows/seo-measure.yml` と `workflows/seo-improve.yml` を `<site>/.github/workflows/` にコピーし、`workflow_dispatch` で `seo-measure` を 1 回手動実行して Slack に届くことを確認する
-7. `~/.company/secretary/notes/seo-rank-watch-sites.md` にサイトを 1 行足す（週次自己監査が外側から見張る）
+5. **先に用意するもの（オーナーの作業）**
+   - `claude setup-token` で OAuth トークンを発行する
+   - Google Cloud でサービスアカウントを作り、JSON キーを発行する。そのメールアドレスを Search Console のプロパティに**「制限付き」**で追加する（初回は 15〜20 分かかる）
+   - Slack の Incoming Webhook URL を用意する
+6. **GitHub Secrets に登録する**: `CLAUDE_CODE_OAUTH_TOKEN` / `GSC_SERVICE_ACCOUNT_EMAIL` / `GSC_SERVICE_ACCOUNT_PRIVATE_KEY` / `SLACK_WEBHOOK_URL`
+7. `workflows/seo-measure.yml` と `workflows/seo-improve.yml` を `<site>/.github/workflows/` にコピーし、`workflow_dispatch` で `seo-measure` を 1 回手動実行して Slack に届くことを確認する
+8. `~/.company/secretary/notes/seo-rank-watch-sites.md` にサイトを 1 行足す（週次自己監査が外側から見張る）
 
 ## 人がやること
 

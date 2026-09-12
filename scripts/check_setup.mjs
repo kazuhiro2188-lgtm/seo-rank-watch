@@ -14,6 +14,21 @@ const ok = (m) => console.log(`✓ ${m}`);
 const warn = (m) => console.log(`⚠ ${m}`);
 const ng = (m) => { console.log(`✗ ${m}`); failed++; };
 
+// ディレクトリを再帰的に列挙する。node_modules と .git は掘らない（outputDir が広く設定された事故対策）。
+function walkFiles(dir) {
+  const out = [];
+  let entries = [];
+  try { entries = readdirSync(dir); } catch { return out; }
+  for (const f of entries) {
+    if (f === 'node_modules' || f === '.git') continue;
+    const p = join(dir, f);
+    let st;
+    try { st = statSync(p); } catch { continue; }
+    if (st.isDirectory()) out.push(...walkFiles(p)); else out.push(p);
+  }
+  return out;
+}
+
 let config;
 try { config = loadConfig(args.repo); ok('seo.config.json を読めた'); } catch (e) { ng(`seo.config.json: ${e.message}`); process.exit(1); }
 
@@ -41,12 +56,26 @@ if (args.withBuild) {
   try {
     execSync(config.build.command, { cwd: args.repo, env: { ...process.env, ...(config.build.env ?? {}) }, stdio: 'pipe' });
     const outDir = join(args.repo, config.build.outputDir ?? 'out');
-    const files = []; (function walk(d) { for (const f of readdirSync(d)) { const p = join(d, f); statSync(p).isDirectory() ? walk(p) : files.push(p); } })(outDir);
+    const files = walkFiles(outDir);
     const raw = files.some((p) => /\.html?$/.test(p) && readFileSync(p, 'utf8').includes('<script>alert("srw-probe")</script>'));
     if (raw) ng('生 HTML がそのまま出力される（サイト側で無効化が必要）'); else ok('生 HTML はエスケープされる');
     if (existsSync(join(outDir, 'data/seo')) || files.some((p) => p.includes('rank-history'))) ng('ビルド出力に data/seo が含まれる'); else ok('ビルド出力に data/seo は含まれない');
   } catch (e) { ng(`ビルド失敗: ${String(e.message).split('\n')[0]}`); }
-  finally { rmSync(probe, { force: true }); }
+  finally {
+    rmSync(probe, { force: true });
+    // 探り針（zz-srw-probe）由来のビルド出力も後始末する。ファイル名の対応規則はサイトごとに違うため、
+    // 中身に「srw-probe」を含むかどうかで判定する。ここで例外を投げると検査全体が落ちるため、丸ごと保護する。
+    try {
+      const outDir = join(args.repo, config.build.outputDir ?? 'out');
+      if (existsSync(outDir)) {
+        const leftover = walkFiles(outDir).filter((p) => {
+          try { return readFileSync(p, 'utf8').includes('srw-probe'); } catch { return false; }
+        });
+        for (const p of leftover) { try { rmSync(p, { force: true }); } catch { /* 個別の削除失敗は無視して続行 */ } }
+        if (leftover.length) ok(`探り針の後始末: ビルド出力 ${leftover.length} 件を削除`);
+      }
+    } catch { /* 後始末の失敗で検査全体を落とさない */ }
+  }
 }
 
 console.log(failed ? `\n不合格 ${failed} 件` : '\n導入検査: 合格');

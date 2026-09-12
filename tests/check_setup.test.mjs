@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, cpSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, cpSync, writeFileSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -26,5 +26,20 @@ test('.gitignore に .env が無ければ不合格、監視語のファイルが
   assert.equal(r.status, 1);
   assert.match(r.stdout, /✗ \.gitignore/);
   assert.match(r.stdout, /✗ x: content\/articles\/nope\.md が無い/);
+  rmSync(dir, { recursive: true, force: true });
+});
+test('--with-build 後、ビルド出力に探り針（srw-probe）が残らない', () => {
+  const dir = site();
+  const r = run(dir, '--with-build');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const leftover = [];
+  (function walk(d) {
+    for (const f of readdirSync(d)) {
+      const p = join(d, f);
+      statSync(p).isDirectory() ? walk(p) : leftover.push(p);
+    }
+  })(join(dir, 'out'));
+  const tainted = leftover.filter((p) => readFileSync(p, 'utf8').includes('srw-probe'));
+  assert.deepEqual(tainted, [], `ビルド出力に探り針の痕跡が残っている: ${tainted.join(', ')}`);
   rmSync(dir, { recursive: true, force: true });
 });
