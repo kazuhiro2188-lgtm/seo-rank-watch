@@ -1,0 +1,259 @@
+name: seo-improve
+
+on:
+  schedule:
+    - cron: '0 21 * * 0'   # 毎週月曜 06:00 JST（UTC 日曜 21:00）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: seo-rank-watch
+  cancel-in-progress: false
+
+env:
+  SRW_DIR: .seo-rank-watch
+  SEO_REPO: .
+  SEO_SOURCE: gsc
+  CLAUDE_CODE_VERSION: '2.1.268'   # 実装時に npm view @anthropic-ai/claude-code version で確認して固定
+
+jobs:
+  think:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    outputs:
+      status: ${{ steps.outcome.outputs.status }}
+      today: ${{ steps.d.outputs.today }}
+      file: ${{ steps.outcome.outputs.file }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false   # AI にリポジトリのトークンを見せない
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+      - name: 日付を確定する
+        id: d
+        run: echo "today=$(TZ=Asia/Tokyo date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: 当日の報告が既にあれば何もしない（べき等）
+        id: guard
+        run: |
+          if [ -f "$SEO_REPO/data/seo/reports/${{ steps.d.outputs.today }}.md" ]; then
+            echo '{"status":"skipped"}' > /tmp/outcome.json; echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 鮮度（古いデータでは直さない）
+        if: steps.guard.outputs.skip == 'false'
+        run: node "$SRW_DIR/scripts/freshness.mjs" --repo "$SEO_REPO" --today "${{ steps.d.outputs.today }}"
+
+      - name: 7 日レビューの判定を計算する
+        if: steps.guard.outputs.skip == 'false'
+        run: node "$SRW_DIR/scripts/review.mjs" --repo "$SEO_REPO" --today "${{ steps.d.outputs.today }}" --out /tmp/verdicts.json
+
+      - name: 候補を 1 つ選ぶ
+        if: steps.guard.outputs.skip == 'false'
+        id: sel
+        run: |
+          node "$SRW_DIR/scripts/select.mjs" --repo "$SEO_REPO" --today "${{ steps.d.outputs.today }}" \
+            --out /tmp/candidate.json --report-only-out /tmp/report-only.json
+          if [ "$(cat /tmp/candidate.json)" = "null" ]; then
+            echo '{"status":"no-candidate"}' > /tmp/outcome.json; echo "has=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has=true" >> "$GITHUB_OUTPUT"
+            cp "$SEO_REPO/$(node -e 'console.log(require("/tmp/candidate.json").file)')" /tmp/original.md
+          fi
+
+      - name: プロンプトを組み立てる（リポジトリ側の仕事）
+        if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
+        run: |
+          mkdir -p /tmp/work/out
+          node "$SRW_DIR/scripts/build_prompt.mjs" --repo "$SEO_REPO" --candidate /tmp/candidate.json --out /tmp/prompt.md --out-dir /tmp/work/out
+
+      - name: Claude CLI を入れる（バージョン固定・自動更新なし）
+        if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
+        run: npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}"
+
+      - name: 改善案を書かせる（鍵は Claude のものだけ・作業場はリポジトリの外）
+        if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
+        working-directory: /tmp/work
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          DISABLE_AUTOUPDATER: '1'
+        run: |
+          claude -p "$(cat /tmp/prompt.md)" \
+            --allowedTools "WebSearch,WebFetch,Write" \
+            --disallowedTools "Bash Read Edit NotebookEdit Glob Grep Task" \
+            --max-turns 40 \
+            --output-format stream-json --verbose \
+            > /tmp/run.log || echo "claude が非ゼロで終了（検査に進む）"
+
+      - name: 変更検査（AI を介さない）
+        if: steps.guard.outputs.skip == 'false' && steps.sel.outputs.has == 'true'
+        run: |
+          node "$SRW_DIR/scripts/verify_change.mjs" --repo "$SEO_REPO" --candidate /tmp/candidate.json \
+            --out-dir /tmp/work/out --run-log /tmp/run.log --outcome /tmp/outcome.json
+          rm -f /tmp/run.log   # 取得ページ本文と AI の全出力を含む。artifact にしない
+
+      - name: 結果を出力へ
+        id: outcome
+        run: |
+          echo "status=$(node -e 'console.log(require("/tmp/outcome.json").status)')" >> "$GITHUB_OUTPUT"
+          echo "file=$(node -e 'const o=require("/tmp/outcome.json");console.log(o.candidate?o.candidate.file:"")')" >> "$GITHUB_OUTPUT"
+          touch /tmp/verdicts.json /tmp/candidate.json /tmp/report-only.json /tmp/original.md
+          mkdir -p /tmp/work/out
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: srw-run
+          path: |
+            /tmp/verdicts.json
+            /tmp/candidate.json
+            /tmp/report-only.json
+            /tmp/outcome.json
+            /tmp/original.md
+            /tmp/work/out/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: 失敗を Slack へ（think が落ちると write は動かないためここで拾う）
+        if: failure() || cancelled()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        shell: bash
+        run: |
+          printf '❌ seo-improve（think）が失敗または時間切れ（%s）\n%s/%s/actions/runs/%s\n' \
+            "${{ steps.d.outputs.today }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" \
+            | "$SRW_DIR/scripts/post-slack.sh"
+
+  build:
+    needs: think
+    if: needs.think.outputs.status == 'pass'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: srw-run
+          path: /tmp/srw
+      - name: 直した 1 ファイルを当ててビルドする（秘密は一切持たない）
+        run: |
+          cp /tmp/srw/work/out/article.md "$SEO_REPO/${{ needs.think.outputs.file }}"
+          cd "$SEO_REPO"
+          node -e '
+            const c = require("./seo.config.json");
+            for (const [k, v] of Object.entries(c.build.env ?? {})) process.stdout.write(`${k}=${v}\n`);
+          ' >> "$GITHUB_ENV"
+          bash -euo pipefail -c "$(node -e 'console.log(require("./seo.config.json").build.command)')"
+      - name: ビルド出力に data/seo が混ざっていないこと
+        run: |
+          out="$SEO_REPO/$(cd "$SEO_REPO" && node -e 'console.log(require("./seo.config.json").build.outputDir ?? "out")')"
+          if [ -e "$out/data/seo" ] || grep -rl "rank-history.jsonl" "$out" >/dev/null 2>&1; then
+            echo "ビルド出力に data/seo が含まれている。置き場を変える" >&2; exit 1
+          fi
+
+  write:
+    needs: [think, build]
+    if: always() && needs.think.result == 'success' && needs.think.outputs.status != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: srw-run
+          path: /tmp/srw
+      - name: git の名乗り
+        run: |
+          git config user.name  "seo-rank-watch-bot"
+          git config user.email "seo-rank-watch-bot@users.noreply.github.com"
+
+      - name: 判定を反映する（悪化は git revert）
+        run: node "$SRW_DIR/scripts/apply.mjs" verdicts --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --verdicts /tmp/srw/verdicts.json
+
+      - name: 変更を書き戻す（pass かつビルド成功のときだけ）。記事とログは別コミット
+        id: change
+        run: |
+          node "$SRW_DIR/scripts/apply.mjs" change --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" \
+            --outcome /tmp/srw/outcome.json --out-dir /tmp/srw/work/out --build-result "${{ needs.build.result }}"
+          FILE="${{ needs.think.outputs.file }}"
+          if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" = "success" ]; then
+            git add "$SEO_REPO/$FILE"
+            git commit -m "seo: improve $FILE"
+            SHA="$(git rev-parse --short HEAD)"
+            node "$SRW_DIR/scripts/apply.mjs" record-sha --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE" --sha "$SHA"
+            echo "applied=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+          fi
+          git add "$SEO_REPO/data/seo/improvement-log.json"
+          git commit -m "seo: record ${{ needs.think.outputs.today }}" || echo "ログに変更なし"
+          git pull --rebase
+          git push
+
+      - name: 公開を確認する（static-dir はここでビルド）
+        id: pub
+        if: steps.change.outputs.applied == 'true'
+        run: |
+          FILE="${{ needs.think.outputs.file }}"
+          if [ "$(cd "$SEO_REPO" && node -e 'console.log(require("./seo.config.json").deploy.type)')" = "static-dir" ]; then
+            (cd "$SEO_REPO" && bash -euo pipefail -c "$(node -e 'console.log(require("./seo.config.json").build.command)')")
+          fi
+          if node "$SRW_DIR/scripts/verify_publish.mjs" --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" \
+               --file "$FILE" --original /tmp/srw/original.md --revised "$SEO_REPO/$FILE"; then
+            node "$SRW_DIR/scripts/apply.mjs" published --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE"
+            echo "verified=true" >> "$GITHUB_OUTPUT"
+          else
+            node "$SRW_DIR/scripts/apply.mjs" unpublished --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" --file "$FILE"
+            echo "verified=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: 報告を書いてコミットする
+        run: |
+          node "$SRW_DIR/scripts/report.mjs" --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" \
+            --verdicts /tmp/srw/verdicts.json --outcome /tmp/srw/outcome.json --report-only /tmp/srw/report-only.json \
+            --slack-out /tmp/slack.txt --repo-url "${{ github.server_url }}/${{ github.repository }}"
+          git add "$SEO_REPO/data/seo/improvement-log.json" "$SEO_REPO/data/seo/reports/"
+          git commit -m "seo: report ${{ needs.think.outputs.today }}"
+          git pull --rebase
+          git push
+
+      - name: Slack へ（先頭 3 行＋報告へのリンク。必須）
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        shell: bash
+        run: cat /tmp/slack.txt | "$SRW_DIR/scripts/post-slack.sh"
+
+      - name: 不合格・ビルド失敗・未公開は赤で終える（GitHub の通知にも載せる）
+        run: |
+          if [ "${{ needs.think.outputs.status }}" = "blocked" ]; then echo "変更検査で不合格"; exit 1; fi
+          if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" != "success" ]; then echo "ビルド失敗"; exit 1; fi
+          if [ "${{ steps.pub.outputs.verified }}" = "false" ]; then echo "公開を確認できなかった"; exit 1; fi
+
+      - name: 失敗を Slack へ
+        if: failure() || cancelled()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        shell: bash
+        run: |
+          printf '❌ seo-improve が失敗または時間切れ（%s）\n%s/%s/actions/runs/%s\n' \
+            "${{ needs.think.outputs.today }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" \
+            | "$SRW_DIR/scripts/post-slack.sh"
