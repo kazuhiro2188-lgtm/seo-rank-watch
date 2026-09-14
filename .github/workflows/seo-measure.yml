@@ -1,0 +1,67 @@
+name: seo-measure
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # 毎日 06:00 JST（UTC 21:00）
+  workflow_dispatch:
+
+permissions:
+  contents: write          # rank-history.jsonl のコミットに必要。workflows: write は付けない
+
+concurrency:
+  group: seo-rank-watch    # seo-improve と同じグループ。同時に走らせない
+  cancel-in-progress: false
+
+env:
+  SRW_DIR: .
+  SEO_REPO: selftest/site   # 定期実行が書き換えてよい自己試験用の複製。fixtures/site はテストが読むので触らせない
+  SEO_SOURCE: fixture
+
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: '22'
+
+      - name: 日付を確定する（AI に決めさせない）
+        id: d
+        run: echo "today=$(TZ=Asia/Tokyo date +%F)" >> "$GITHUB_OUTPUT"
+
+      - name: 測る（書くのは rank-history.jsonl だけ）
+        env:
+          GSC_SERVICE_ACCOUNT_EMAIL: ${{ secrets.GSC_SERVICE_ACCOUNT_EMAIL }}
+          GSC_SERVICE_ACCOUNT_PRIVATE_KEY: ${{ secrets.GSC_SERVICE_ACCOUNT_PRIVATE_KEY }}
+        run: |
+          node "$SRW_DIR/scripts/fetch_ranks.mjs" --repo "$SEO_REPO" --today "${{ steps.d.outputs.today }}" \
+            --source "$SEO_SOURCE" --warnings-out /tmp/warnings.txt
+
+      - name: コミット（変更があるときだけ・パスを固定・-A は使わない）
+        run: |
+          git config user.name  "seo-rank-watch-bot"
+          git config user.email "seo-rank-watch-bot@users.noreply.github.com"
+          git add "$SEO_REPO/data/seo/rank-history.jsonl"
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "seo: measure ${{ steps.d.outputs.today }}"
+          git pull --rebase
+          git push
+
+      - name: 警告があれば Slack へ
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        shell: bash
+        run: |
+          if [ -s /tmp/warnings.txt ]; then cat /tmp/warnings.txt | "$SRW_DIR/scripts/post-slack.sh"; fi
+
+      - name: 失敗を Slack へ
+        if: failure() || cancelled()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        shell: bash
+        run: |
+          printf '❌ seo-measure が失敗または時間切れ（%s）\n%s/%s/actions/runs/%s\n' \
+            "${{ steps.d.outputs.today }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" \
+            | "$SRW_DIR/scripts/post-slack.sh"
