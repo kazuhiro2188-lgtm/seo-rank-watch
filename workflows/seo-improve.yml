@@ -163,8 +163,10 @@ jobs:
           name: srw-run
           path: /tmp/srw
       - name: 直した 1 ファイルを当てて updatedAt を刻む（書き戻しと同じバイトにする）
+        env:
+          FILE: ${{ needs.think.outputs.file }}
         run: |
-          cp /tmp/srw/work/out/article.md "$SEO_REPO/${{ needs.think.outputs.file }}"
+          cp /tmp/srw/work/out/article.md "$SEO_REPO/$FILE"
           # apply.mjs change が書き戻し時に刻むのと同じ updatedAt を、ビルドの前にここでも刻む。
           # 省くと「ビルドで試したバイト」と「push するバイト」が 1 行ずれ、updatedAt を厳格に検証する
           # サイトではこの段が緑でも本番のビルドだけが落ちる。
@@ -177,7 +179,7 @@ jobs:
               writeFileSync(file, setUpdatedAt(readFileSync(file, "utf8"), field, today));
               console.log(`${field}: ${today} を刻んだ`);
             });
-          ' "$SEO_REPO/${{ needs.think.outputs.file }}" "$SEO_REPO/seo.config.json" \
+          ' "$SEO_REPO/$FILE" "$SEO_REPO/seo.config.json" \
             "${{ needs.think.outputs.today }}" "$SRW_DIR/scripts/lib/apply.mjs"
 
       - name: ビルドする（秘密は一切持たない）
@@ -221,10 +223,11 @@ jobs:
 
       - name: 変更を書き戻す（pass かつビルド成功のときだけ）。記事とログは別コミット・ログは記事の直後に積んで最初の push に含める
         id: change
+        env:
+          FILE: ${{ needs.think.outputs.file }}
         run: |
           node "$SRW_DIR/scripts/apply.mjs" change --repo "$SEO_REPO" --today "${{ needs.think.outputs.today }}" \
             --outcome /tmp/srw/outcome.json --out-dir /tmp/srw/work/out --build-result "${{ needs.build.result }}"
-          FILE="${{ needs.think.outputs.file }}"
           if [ "${{ needs.think.outputs.status }}" = "pass" ] && [ "${{ needs.build.result }}" = "success" ]; then
             git add "$SEO_REPO/$FILE"
             git commit -m "seo: improve $FILE"
@@ -254,8 +257,9 @@ jobs:
       - name: 公開を確認する（static-dir はここでビルド）
         id: pub
         if: steps.change.outputs.applied == 'true'
+        env:
+          FILE: ${{ needs.think.outputs.file }}
         run: |
-          FILE="${{ needs.think.outputs.file }}"
           if [ "$(cd "$SEO_REPO" && node -e 'console.log(require("./seo.config.json").deploy.type)')" = "static-dir" ]; then
             (cd "$SEO_REPO" && bash -euo pipefail -c "$(node -e 'console.log(require("./seo.config.json").build.command)')")
           fi

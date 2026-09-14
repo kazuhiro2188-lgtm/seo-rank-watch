@@ -10,17 +10,19 @@ const SELF_RUN = ['.github/workflows/seo-measure.yml', '.github/workflows/seo-im
 
 /**
  * YAML から「名前つきステップ」を順に取り出す（依存ゼロの最小実装）。
- * 宣言的成果物は生の全文に正規表現をかけるのではなく、{ name, run } の配列という
+ * 宣言的成果物は生の全文に正規表現をかけるのではなく、{ name, run, env } の配列という
  * 正規化した意味のモデルに直してから表明する。
  * - `- name:` の行でステップが始まり、同じ深さの次の項目かより浅い行で終わる
  * - `run: |` のブロックも `run: <その場書き>` も run に入れる（ブロックは字下げを剥がす）
+ * - ステップ自身の `env:` ブロックは { キー: 値 } に正規化する（無ければ {}）
  */
 function parseSteps(yaml) {
   const steps = [];
   let cur = null;        // 収集中のステップ
   let runIndent = null;  // run: ブロックを読んでいる間だけ、その run: キーの深さ
+  let envIndent = null;  // env: ブロックを読んでいる間だけ、その env: キーの深さ
   const indentOf = (l) => l.match(/^ */)[0].length;
-  const close = () => { if (cur) steps.push({ name: cur.name, run: cur.run.join('\n') }); cur = null; };
+  const close = () => { if (cur) steps.push({ name: cur.name, run: cur.run.join('\n'), env: cur.env }); cur = null; };
 
   for (const line of yaml.split('\n')) {
     const blank = line.trim() === '';
@@ -33,12 +35,23 @@ function parseSteps(yaml) {
     }
     runIndent = null;
 
+    // env: ブロックの中身（ブロックより深い行）
+    if (cur && envIndent !== null && !blank && indent > envIndent) {
+      const m = line.match(/^\s+([A-Za-z_][A-Za-z0-9_]*):\s*(.*)$/);
+      if (m) cur.env[m[1]] = m[2].replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
+      continue;
+    }
+    envIndent = null;
+
     // 同じ深さの次の項目、またはより浅い行でステップは終わる
     if (cur && !blank && (indent < cur.indent || (indent === cur.indent && /^\s*- /.test(line)))) close();
 
     const start = line.match(/^( *)- name:\s*(.*)$/);
-    if (start) { cur = { indent: start[1].length, name: start[2].trim(), run: [] }; continue; }
+    if (start) { cur = { indent: start[1].length, name: start[2].trim(), run: [], env: {} }; continue; }
     if (!cur || blank) continue;
+
+    const env = line.match(/^( *)env:\s*$/);
+    if (env) { envIndent = env[1].length; continue; }
 
     const run = line.match(/^( *)run:\s*(.*)$/);
     if (run) {
@@ -109,9 +122,9 @@ test('ステップ抽出のヘルパー: name と run を対にして順に取�
     '',
   ].join('\n');
   assert.deepEqual(parseSteps(sample), [
-    { name: '一つ目', run: 'echo あ\n\necho い' },
-    { name: '二つ目', run: 'echo う' },
-    { name: '三つ目', run: 'echo え' },
+    { name: '一つ目', run: 'echo あ\n\necho い', env: { X: '1' } },
+    { name: '二つ目', run: 'echo う', env: {} },
+    { name: '三つ目', run: 'echo え', env: {} },
   ]);
 });
 
@@ -205,6 +218,25 @@ test('revert 用の SHA は push 後に記録する（同じステップの中�
     const firstPull = lines.findIndex((l) => /git pull --rebase/.test(l));
     assert.ok(firstPull >= 0 && firstPull < record, `${p}: push 前の git pull --rebase が無い`);
     assert.match(lines[firstPull], /--autostash/, `${p}: 記事を push する前の git pull --rebase に --autostash が無い（improvement-log.json が未コミットのままなので必ず失敗する）`);
+  }
+});
+
+test('ファイルパスは env 経由で渡す。run: のシェル本文に needs.think.outputs.file を直接展開しない（スクリプトインジェクション対策・両方の YAML）', () => {
+  for (const p of IMPROVE) {
+    const buildSteps = parseSteps(jobSection(read(p), 'build'));
+    const writeSteps = parseSteps(jobSection(read(p), 'write'));
+    const targets = [
+      { label: 'build: updatedAt を刻む', i: buildSteps.findIndex((s) => s.run.includes('setUpdatedAt')), steps: buildSteps },
+      { label: 'write: 変更を書き戻す', i: writeSteps.findIndex((s) => s.run.includes('record-sha')), steps: writeSteps },
+      { label: 'write: 公開を確認する', i: writeSteps.findIndex((s) => s.run.includes('verify_publish.mjs')), steps: writeSteps },
+    ];
+    for (const { label, i, steps } of targets) {
+      assert.ok(i >= 0, `${p} (${label}): ステップが見つからない`);
+      const step = steps[i];
+      assert.equal(step.env.FILE, '${{ needs.think.outputs.file }}', `${p} (${label}): env.FILE が needs.think.outputs.file に束ねられていない`);
+      assert.equal(step.run.includes('needs.think.outputs.file'), false, `${p} (${label}): run: のシェル本文に needs.think.outputs.file が直接展開されている`);
+      assert.ok(step.run.includes('$FILE'), `${p} (${label}): run: が $FILE を参照していない`);
+    }
   }
 });
 

@@ -45,6 +45,22 @@ test('AI が出力しなかった・JSON が壊れていると blocked', () => {
   assert.ok(o.failures.some((f) => /pending-action/.test(f.detail)));
   rmSync(dir, { recursive: true, force: true });
 });
+test('candidate.file が targetPath の再導出と食い違うと blocked。対象ファイルは 1 バイトも変更されない', () => {
+  const dir = setup();
+  const candidate = JSON.parse(readFileSync(join(dir, 'candidate.json'), 'utf8'));
+  candidate.file = 'seo.config.json'; // targetPath (/first-run) からは content/articles/first-run.md が導かれるはず
+  writeFileSync(join(dir, 'candidate.json'), JSON.stringify(candidate));
+  const before = readFileSync(join(dir, 'site/seo.config.json'), 'utf8');
+  writeFileSync(join(dir, 'out/article.md'), '書き換えられた本文');
+  writeFileSync(join(dir, 'out/pending-action.json'), JSON.stringify({ keyword: '試験 キーワード 一番', targetPath: '/first-run', editType: 'faq', needs: '知りたいこと', done: 'やった', proposals: [], needsAuthor: [] }));
+  const r = run(dir);
+  assert.equal(r.status, 0, r.stderr);
+  const o = JSON.parse(readFileSync(join(dir, 'outcome.json'), 'utf8'));
+  assert.equal(o.status, 'blocked');
+  assert.ok(o.failures.some((f) => f.check === 8 && /targetPath/.test(f.detail)), JSON.stringify(o.failures));
+  assert.equal(readFileSync(join(dir, 'site/seo.config.json'), 'utf8'), before);
+  rmSync(dir, { recursive: true, force: true });
+});
 test('candidate.json が壊れていても終了コード 0 で outcome を書く（実行時の読み込み失敗）', () => {
   const dir = setup();
   writeFileSync(join(dir, 'candidate.json'), '{broken');

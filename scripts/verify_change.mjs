@@ -2,7 +2,7 @@
 // 変更検査。終了コードは常に 0。結果は outcome.json の status（pass / blocked）。
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { loadConfig } from './lib/config.mjs';
+import { loadConfig, resolveFile } from './lib/config.mjs';
 import { verifyChange } from './lib/checks.mjs';
 import { extractFetchedDomains } from './lib/runlog.mjs';
 import { lineDiff } from './lib/diff.mjs';
@@ -16,6 +16,16 @@ let config, candidate, original;
 try {
   config = loadConfig(args.repo);
   candidate = JSON.parse(readFileSync(args.candidate, 'utf8'));
+  if (resolveFile(config, candidate.targetPath) !== candidate.file) {
+    const outcome = {
+      status: 'blocked',
+      failures: [{ check: 8, detail: 'candidate.file が targetPath と整合しない' }],
+      candidate, pendingAction: null, diff: null, fingerprint: null,
+    };
+    writeFileSync(args.outcome, `${JSON.stringify(outcome, null, 2)}\n`);
+    console.log(`不合格 1 件:\n  [8] ${outcome.failures[0].detail}`);
+    process.exit(0);
+  }
   original = readFileSync(join(args.repo, candidate.file), 'utf8');
 } catch (err) {
   const outcome = {
